@@ -17,6 +17,7 @@ MONTHS = {"January":1, "February":2, "March":3, "April": 4, "May":5, "June":6, "
 # returns soup object for website_url or None if doesn't work
 def get_soup_webpage(website_url):
 	page = requests.get(website_url)
+	time.sleep(1) # wait 1 sec
 	if not page.ok: # if the page was returned ok
 		return None
 	
@@ -57,7 +58,7 @@ def get_authors_Science(website_url, is_all_authors=True):
 
 	return authors 
 
-def get_all_data_issue_view(website_url):
+def get_all_data_issue_view(website_url, issue_number, vol_number):
 	soup = get_soup_webpage(website_url)
 	if not soup:
 		return None
@@ -94,11 +95,13 @@ def get_all_data_issue_view(website_url):
 			journal_name = article.find("abbr").string
 
 			# put all in list of dicts
-			all_articles_in_view.append({"Title": str(full_title), 
+			all_articles_in_view.append({"Title": str(full_title[0]), 
 										 "Type": article_type, 
 										 "Authors": all_article_authors, 
 										 "Date": date_format,
-										 "Journal": journal_name})
+										 "Journal": journal_name,
+										 "Issue Number": issue_number,
+										 "Volume Number": vol_number})
 
 	return all_articles_in_view
 
@@ -130,6 +133,9 @@ def scrape_Science_simple(n_of_issues):
 # returns list of dicts from each issue and enter to MongoDB
 def scrape_Science_db(n_of_issues):
 
+	# init response with None
+	response = None
+
 	# connect to mongoDB
 	connection = MongoClient('localhost', 27017)
 	db = connection.journals
@@ -140,23 +146,28 @@ def scrape_Science_db(n_of_issues):
 
 	while n_of_issues>0:
 		
-		website_url = SCIENCE_MAIN_PAGE + "content/" + str(vol_number) + "/" + str(issue_number) + ".toc"
-		response = get_all_data_issue_view(website_url)
+		# check if in db before scrape
+		vol_issue_in_db = collection.find({"Issue Number": issue_number, "Volume Number": vol_number})
+		
+		if not vol_issue_in_db.count(): # if not in db: get data
+			website_url = SCIENCE_MAIN_PAGE + "content/" + str(vol_number) + "/" + str(issue_number) + ".toc"
+			response = get_all_data_issue_view(website_url, issue_number, vol_number)
+			time.sleep(1) # pause for 1 sec between pages
 
-		if not response:
-			vol_number = vol_number - 1
-			continue
-		else:
+			if not response: # if the vol num should be changed: query issue num again with diff vol num
+				vol_number = vol_number - 1
+			else: # if got a response, decrease n_of_issues and issue number
+				collection.insert(response)
+				n_of_issues = n_of_issues - 1
+				issue_number = issue_number - 1
 
-			# put data in db
-			collection.insert(response)
+		else: # if was in db: decrease issue num and n_of_issues 
 			issue_number = issue_number - 1
 			n_of_issues = n_of_issues - 1
-			time.sleep(1) # pause for 1 sec between pages
 
 	connection.close()
 
-	return None
+	return response
 
 
 #print get_authors_Science("http://www.sciencemag.org/content/346/6215.toc", True)

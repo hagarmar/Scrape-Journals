@@ -17,7 +17,7 @@ MONTHS = {"January":1, "February":2, "March":3, "April": 4, "May":5, "June":6, "
 # returns soup object for website_url or None if doesn't work
 def get_soup_webpage(website_url):
 	page = requests.get(website_url)
-	time.sleep(1) # wait 1 sec
+	time.sleep(1) # pause 1 sec between pages
 	if not page.ok: # if the page was returned ok
 		return None
 	
@@ -58,6 +58,44 @@ def get_authors_Science(website_url, is_all_authors=True):
 
 	return authors 
 
+# gets the author names and their affiliations from the abstract page of the article
+# returns a list of dicts of authors and affiliations
+def get_affs_and_authors(website_url):
+	soup = get_soup_webpage(website_url)
+	if not soup:
+		return None
+
+	# make dict of aff number and aff name
+	all_affiliations = soup.select("li.aff")
+	all_affs_and_numbers = {}
+
+	for aff in all_affiliations:
+	    # clean the affiliations text: /n, trailing whitespaces, trailing "."
+	    aff_text = " ".join([x.strip() for x in aff.address.text[1:].strip().strip('.').split('\n')])    
+	    
+	    #create dict with aff # and name for use with author affiliation numbers
+	    all_affs_and_numbers[aff.a["name"]] = aff_text
+
+	# get author names and affiliations
+	# then compare to aff numbers found before
+	all_authors = soup.select("li.contributor")
+	all_authors_and_affs = []
+
+	for author in all_authors:
+	    author_name = author.find(class_="name-search").text.strip()
+	    author_aff_numbers = [x.get("href")[1:] for x in author.find_all(class_="xref-aff")]
+	    
+	    author_affs_and_numbers = []
+	    
+	    for aff_number in author_aff_numbers:
+	        author_affs_and_numbers.append(all_affs_and_numbers[aff_number])
+
+	    single_author = {"name":author_name, "affiliation":author_affs_and_numbers}
+	    all_authors_and_affs.append(single_author)
+
+	return all_authors_and_affs
+
+
 def get_all_data_issue_view(website_url, issue_number, vol_number):
 	soup = get_soup_webpage(website_url)
 	if not soup:
@@ -69,39 +107,44 @@ def get_all_data_issue_view(website_url, issue_number, vol_number):
 	for article_type in ARTICLE_TYPES:
 
 		# list with all articles of specific type in this issue
-		all_articles_of_type = soup.select("div.pub-section-%s div.cit-metadata" % article_type)
+		all_articles_of_type = soup.select("div.pub-section-%s li.toc-cit" % article_type)
 
 		for article in all_articles_of_type:
 
-			# get article title
-			title_raw=article.select("h4")
-			p=re.compile('>.*?<') # get all elements of the title, between > and <
-			title_matches = p.findall(str(title_raw))
+		    # get article title
+		    title_raw=article.select("h4")
+		    p=re.compile('>.*?<') # get all elements of the title, between > and <
+		    title_matches = p.findall(str(title_raw))
 
-			full_title = []
-			for part in title_matches:
-				full_title.append(part[1:-2]) # get without < and >
+		    full_title = []
+		    for part in title_matches:
+		        full_title.append(part[1:-2]) # get without < and >
+		    # get all article authors
+		    #all_article_authors = ([x.string for x in article.select("span.cit-auth-type-author")])
 
-			# get all article authors
-			all_article_authors = ([x.string for x in article.select("span.cit-auth-type-author")])
-		
-			# get author affiliations??
+		    # get author affiliations??
+		    first_page = article.find("div", {"class":"cit-extra"}).a.get("href")
 
-			# get article date
-			article_date_raw = article.find("span", {"class":"cit-print-date"}).get_text().replace(":", "").strip().split()
-			date_format = datetime.datetime(int(article_date_raw[2]), MONTHS[article_date_raw[1]], int(article_date_raw[0]))
+		    abstract_website_url = SCIENCE_MAIN_PAGE[:-1] + first_page
+		    all_affiliations_and_authors = get_affs_and_authors(abstract_website_url)
 
-			# get journal name
-			journal_name = article.find("abbr").string
+		    # get article date
+		    article_date_raw = article.find("span", {"class":"cit-print-date"}).get_text().replace(":", "").strip().split()
+		    date_format = datetime.datetime(int(article_date_raw[2]), MONTHS[article_date_raw[1]], int(article_date_raw[0]))
 
-			# put all in list of dicts
-			all_articles_in_view.append({"Title": str(full_title[0]), 
-										 "Type": article_type, 
-										 "Authors": all_article_authors, 
-										 "Date": date_format,
-										 "Journal": journal_name,
-										 "Issue Number": issue_number,
-										 "Volume Number": vol_number})
+		    # get journal name
+		    journal_name = article.find("abbr").string
+
+		    # put all in list of dicts
+		    all_articles_in_view.append({"title": str(full_title[0]), 
+		                                 "type": article_type, 
+		                                 "authors": all_affiliations_and_authors, #all_article_authors, 
+		                                 "date": date_format,
+		                                 "journal": journal_name,
+		                                 "issue number": issue_number,
+		                                 "volume number": vol_number,
+		                                 "url" : abstract_website_url})
+
 
 	return all_articles_in_view
 
@@ -147,12 +190,13 @@ def scrape_Science_db(n_of_issues):
 	while n_of_issues>0:
 		
 		# check if in db before scrape
-		vol_issue_in_db = collection.find({"Issue Number": issue_number, "Volume Number": vol_number})
-		
+		vol_issue_in_db = collection.find({"issue number": issue_number, "volume number": vol_number})
+
 		if not vol_issue_in_db.count(): # if not in db: get data
 			website_url = SCIENCE_MAIN_PAGE + "content/" + str(vol_number) + "/" + str(issue_number) + ".toc"
 			response = get_all_data_issue_view(website_url, issue_number, vol_number)
-			time.sleep(1) # pause for 1 sec between pages
+
+			#time.sleep(1) # pause for 1 sec between pages
 
 			if not response: # if the vol num should be changed: query issue num again with diff vol num
 				vol_number = vol_number - 1
